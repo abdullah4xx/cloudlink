@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=CloudLink
+Comment=Share files with your phone over Wi-Fi (no internet, no server)
+Exec=cloudlink-gtk
+Icon=folder-remote
+Terminal=false
+Categories=Network;FileTransfer;

@@ -1,0 +1,29 @@
+{
+  "privA": "0101010101010101010101010101010101010101010101010101010101010101",
+  "privB": "0202020202020202020202020202020202020202020202020202020202020202",
+  "pubA": "a4e09292b651c278b9772c569f5fa9bb13d906b46ab68c9df9dc2b4409f8a209",
+  "pubB": "ce8d3ad1ccb633ec7b70c17814a5c76ecd029685050d344745ba05870e587d59",
+  "shared": "2ed76ab549b1e73c031eb49c9448f0798aea81b698279a0c3dc3e49fbfc4b953",
+  "authKey": "ee722fb2259c48538788766f7e38c0b3feeb46e92ce5fd03ca3c0c76f949108d",
+  "encKey": "abd263b7e5bfe532251df8b4c5177fc765314303fac6d5ea2f0f9b46d2b72aa3",
+  "authHash": "31e7e8734febf710c0baac9e5752db275626ce8cca2d1322c1e57541024fd70c",
+  "sas": "587774",
+  "tid": "000102030405060708090a0b0c0d0e0f",
+  "xferKey": "c81ede3292e9cb9063edae44debd065be29c93bf46d8f1827539dd262b4027dd",
+  "chunkSeq": 7,
+  "chunkPlain": "hello cloudlink",
+  "chunkFrame": "01000102030405060708090a0b0c0d0e0f00000007fd816dc0734737113d8cd58fe31842e4a0a5479a4dcba75e0f024ecbee31ea",
+  "ctlJson": "{\"type\":\"ping\"}",
+  "ctlBlob": "AAECAwQFBgcICQoLbyTmSURJMZ3X4ggdA/Lqp9T9pkOqpXxA6wCg7qJKGA==",
+  "v2": {
+    "pairNonce": "000102030405060708090a0b0c0d0e0f",
+    "pairCommit": "0fc82126c6345e6a64036feff5fb14adc0a46a6aecdf0afc0aea909869d7b3e9",
+    "ncHex": "000102030405060708090a0b0c0d0e0f",
+    "nsHex": "101112131415161718191a1b1c1d1e1f",
+    "idClient": "andr-1",
+    "idServer": "linux-1",
+    "macSrv": "88fffafad5b3fa6436fffd9f26af50e1371e52911df9aaeb86f296626b7cd88f",
+    "macCli": "8cb32175a55866d490d59bd11ba194ac6dc75c0ab67ca4bfd392aeb267467a7c",
+    "sessionKey": "8f3e341489c9755d81d9283a5558bd9427201579c7b1a1f5fea5d42d675961dd"
+  }
+}
