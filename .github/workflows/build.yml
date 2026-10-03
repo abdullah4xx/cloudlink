@@ -1,9 +1,6 @@
-cat > .github/workflows/build.yml <<'EOF'
-name: build
-on:
-  push:
-  pull_request:
-  workflow_dispatch:
+python3 - <<'PY'
+text = """name: build
+on: [push, pull_request, workflow_dispatch]
 
 jobs:
   linux:
@@ -15,7 +12,7 @@ jobs:
         working-directory: linux_app
         run: |
           for t in tests/test_*.py; do echo "== $t"; python3 "$t"; done
-      - name: Build .deb
+      - name: Build deb
         run: ./packaging/build_deb.sh 2.0.0
       - uses: actions/upload-artifact@v4
         with:
@@ -30,13 +27,11 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      # The ubuntu-24.04 runner already ships the Android SDK (ANDROID_HOME, platform 34, build-tools, licenses).
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
-      # keep the Kotlin test vectors identical to the protocol's source of truth
       - run: cp protocol/test_vectors.json android/app/src/test/resources/test_vectors.json
-      - name: Unit tests (crypto vectors + two-engine loopback)
+      - name: Unit tests
         working-directory: android
         run: gradle --no-daemon testDebugUnitTest
       - name: Build debug APK
@@ -46,4 +41,7 @@ jobs:
         with:
           name: cloudlink-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
-EOF
+"""
+open(".github/workflows/build.yml", "w", encoding="utf-8").write(text)
+PY
+python3 -c "import yaml; yaml.safe_load(open('.github/workflows/build.yml')); print('YAML OK')"
