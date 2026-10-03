@@ -3,7 +3,10 @@
 Every device is both a **server** (TCP listener, default port 47616) and a **client**.
 Android implements the same thing in Kotlin (`ServerSocket` + foreground service).
 
-## Discovery (UDP broadcast, port 47615)
+## Discovery (mDNS `_cloudlink._tcp` + UDP broadcast, port 47615)
+
+Since 2.1.0 devices also register an mDNS/DNS-SD service `<id>._cloudlink._tcp.local.` with TXT records `id`, `name`, `v=2` and the TCP port as the service port. mDNS peers are removed when the service disappears. The UDP beacons below remain as a fallback; both are unauthenticated hints.
+
 Every 2 s: `{"app":"cloudlink","v":2,"id":"<deviceId>","name":"<display name>","port":<tcp port>}`
 sent to 255.255.255.255:47615 and received on the same port. Unauthenticated hint only (address + label);
 entries expire after 8 s. Manual "connect by IP" must also be offered (some routers block broadcast / isolate clients).

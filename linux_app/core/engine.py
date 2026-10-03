@@ -138,6 +138,10 @@ class Engine:
         except Exception:  # لا نسمح لخطأ UI بإسقاط المحرّك
             log.exception("on_event failed")
 
+    def local_ips(self) -> list[str]:
+        from .netinfo import local_ips
+        return local_ips()
+
     # ------------------------------------------------------------ peers view
     def _publish_peers(self) -> None:
         seen = self.discovery.peers if self.discovery else {}

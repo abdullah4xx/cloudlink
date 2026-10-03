@@ -59,10 +59,11 @@ def main() -> None:
     try:
         if a.cmd == "devices":
             time.sleep(3)
+            print(f"this computer: {eng.state.device_name} at {', '.join(eng.local_ips()) or 'unknown IP'}:{eng.port}")
             for pr in eng.call(_peers(eng)).result():
                 print(f'{pr["name"]:20} {pr["host"]}:{pr["port"]}  {"paired" if pr["paired"] else "not paired"}  id={pr["id"]}')
         elif a.cmd == "serve":
-            print(f"serving {eng.state.get_share_root()} as '{eng.state.device_name}' on port {eng.port} (Ctrl+C to stop)")
+            print(f"serving {eng.state.get_share_root()} as '{eng.state.device_name}' on {', '.join(eng.local_ips()) or 'unknown IP'}:{eng.port} (Ctrl+C to stop)")
             while True:
                 try:
                     ev = wait("pairing", lambda d: d["stage"] == "request", timeout=3600)

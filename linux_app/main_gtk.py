@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CloudLink — GTK4 front-end for the LAN engine (no internet, no server).
+"""CloudLink — GTK4 front-end for the LAN engine (no internet, no server). Light/dark follows the system.
 
 Needs: python3-gi, gir1.2-gtk-4.0 (and python3-cryptography for the core).
 The engine runs on its own thread; every engine event is marshalled to the GTK main loop with GLib.idle_add.
@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gi  # noqa: E402
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gio, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from core.engine import Engine, EngineError  # noqa: E402
 
@@ -31,29 +31,195 @@ def human_size(n: int) -> str:
     return f"{n} B"
 
 
+# ---------------------------------------------------------------------------------------------- theme
+PALETTES = {
+    "dark": dict(bg="#121317", surface="#1b1d23", surface2="#252830", text="#f1f2f4", dim="#9b9fab",
+                 border="#2b2e37", shadow="0.35", accent="#2f8cff", accent_fg="#ffffff"),
+    "light": dict(bg="#f3f4f8", surface="#ffffff", surface2="#eceef4", text="#1a1c22", dim="#6a6e7a",
+                  border="#e1e4ec", shadow="0.08", accent="#1f7aff", accent_fg="#ffffff"),
+}
+
+CSS = """
+window.cl, window.cl .cl-page { background: {bg}; color: {text}; }
+.cl-top { background: {surface}; border-bottom: 1px solid {border}; }
+.cl-brand { font-weight: 800; font-size: 17px; }
+.cl-badge { background: {surface2}; color: {dim}; border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 700; }
+.cl-card { background: {surface}; border: 1px solid {border}; border-radius: 18px; padding: 16px;
+           box-shadow: 0 6px 18px rgba(0,0,0,{shadow}); }
+.cl-title { font-size: 24px; font-weight: 800; }
+.cl-h { font-size: 14px; font-weight: 800; }
+.cl-dim { color: {dim}; font-size: 12px; }
+.cl-ip { font-family: monospace; font-size: 22px; font-weight: 800; }
+.cl-dot-on { color: #2fbf71; } .cl-dot-off { color: {dim}; }
+.cl-folder { border-radius: 16px; padding: 14px 16px; color: #ffffff; border: none; min-height: 64px;
+             box-shadow: 0 8px 18px rgba(0,0,0,{shadow}); }
+.cl-folder label { color: #ffffff; }
+.cl-folder-0 { background: linear-gradient(135deg, #2f9bff, #1676f3); }
+.cl-folder-1 { background: linear-gradient(135deg, #7b4dff, #5b2fe0); }
+.cl-folder-2 { background: linear-gradient(135deg, #46b04f, #2f8f3a); }
+.cl-file { background: {surface}; border: 1px solid {border}; border-radius: 16px; padding: 0;
+           box-shadow: 0 4px 12px rgba(0,0,0,{shadow}); }
+.cl-thumb { background: {surface2}; border-radius: 15px 15px 0 0; min-height: 84px; color: {dim}; }
+.cl-fname { font-weight: 700; font-size: 13px; }
+button.cl-primary { background: {accent}; color: {accent_fg}; border-radius: 12px; border: none; box-shadow: none;
+                    font-weight: 700; padding: 6px 16px; }
+button.cl-soft { background: {surface2}; color: {text}; border-radius: 12px; border: none; box-shadow: none; padding: 6px 14px; }
+button.cl-flat { background: transparent; color: {text}; border: none; box-shadow: none; border-radius: 12px; }
+button.cl-flat:hover, button.cl-soft:hover { background: {border}; }
+entry, searchentry { background: {surface2}; color: {text}; border-radius: 12px; border: 1px solid {border}; box-shadow: none; }
+progressbar trough { background: {surface2}; border-radius: 99px; min-height: 8px; border: none; }
+progressbar progress { background: {accent}; border-radius: 99px; min-height: 8px; border: none; }
+.cl-toast { background: {text}; color: {bg}; border-radius: 12px; padding: 8px 14px; }
+list, row { background: transparent; }
+"""
+
+
+def system_is_dark(default_prefer_dark: bool) -> bool:
+    """Light/dark from the desktop: GNOME color-scheme, else the GTK theme name, else the GTK setting."""
+    try:
+        src = Gio.SettingsSchemaSource.get_default()
+        if src and src.lookup("org.gnome.desktop.interface", True):
+            scheme = Gio.Settings.new("org.gnome.desktop.interface").get_string("color-scheme")
+            if scheme == "prefer-dark":
+                return True
+            if scheme == "prefer-light":
+                return False
+    except Exception:  # noqa: BLE001
+        pass
+    st = Gtk.Settings.get_default()
+    theme = (st.get_property("gtk-theme-name") or "").lower() if st else ""
+    if "dark" in theme:
+        return True
+    return default_prefer_dark
+
+
+def _clear(widget) -> None:  # noqa: ANN001 - ListBox / FlowBox / Box
+    child = widget.get_first_child()
+    while child:
+        nxt = child.get_next_sibling()
+        widget.remove(child)
+        child = nxt
+
+
+def _label(text: str = "", *classes: str, xalign: float = 0, **kw) -> Gtk.Label:  # noqa: ANN003
+    lb = Gtk.Label(label=text, xalign=xalign, **kw)
+    for c in classes:
+        lb.add_css_class(c)
+    return lb
+
+
+def _button(text: str = "", kind: str = "soft", icon: str | None = None) -> Gtk.Button:
+    b = Gtk.Button(label=text) if not icon else Gtk.Button(icon_name=icon)
+    b.add_css_class(f"cl-{kind}")
+    return b
+
+
+def _card(*classes: str) -> Gtk.Box:
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    box.add_css_class("cl-card")
+    for c in classes:
+        box.add_css_class(c)
+    return box
+
+
 class Window(Gtk.ApplicationWindow):
     def __init__(self, app: Gtk.Application) -> None:
-        super().__init__(application=app, title="CloudLink", default_width=760, default_height=560)
+        super().__init__(application=app, title="CloudLink", default_width=1120, default_height=720)
+        self.add_css_class("cl")
+        self.set_icon_name("cloudlink")
         self.engine = Engine(self._on_engine_event)
         self.engine.start()
         self.peers: list[dict] = []
         self.browse_peer: dict | None = None
         self.browse_path = "/"
+        self.entries_all: list[dict] = []
         self._dialog: Gtk.Window | None = None
         self._transfer_rows: dict[str, tuple[Gtk.ListBoxRow, Gtk.Label, Gtk.ProgressBar]] = {}
+        self._finished: set[str] = set()
+        self._ips: list[str] = []
 
-        header = Gtk.HeaderBar()
-        self.set_titlebar(header)
-        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
-        switcher = Gtk.StackSwitcher(stack=self.stack)
-        header.set_title_widget(switcher)
+        # theme: follow the system, live
+        st = Gtk.Settings.get_default()
+        self._default_dark = bool(st.get_property("gtk-application-prefer-dark-theme")) if st else False
+        self._provider = Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), self._provider,
+                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self._apply_theme()
+        if st:
+            st.connect("notify::gtk-theme-name", lambda *_: self._apply_theme())
+        try:
+            src = Gio.SettingsSchemaSource.get_default()
+            if src and src.lookup("org.gnome.desktop.interface", True):
+                Gio.Settings.new("org.gnome.desktop.interface").connect("changed::color-scheme",
+                                                                         lambda *_: self._apply_theme())
+        except Exception:  # noqa: BLE001
+            pass
 
-        self.stack.add_titled(self._build_devices(), "devices", "Devices")
-        self.stack.add_titled(self._build_files(), "files", "Files")
-        self.stack.add_titled(self._build_transfers(), "transfers", "Transfers")
-        self.stack.add_titled(self._build_settings(), "settings", "Settings")
-        self.set_child(self.stack)
+        self._build_top()
+        body = Gtk.Box(spacing=0)
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, hexpand=True, vexpand=True)
+        self.stack.add_named(self._scroll(self._build_home()), "home")
+        self.stack.add_named(self._scroll(self._build_files()), "files")
+        self.stack.add_named(self._scroll(self._build_settings()), "settings")
+        body.append(self.stack)
+        body.append(self._build_sidebar())
+        overlay = Gtk.Overlay(child=body)
+        self.toast_label = Gtk.Label(wrap=True)
+        self.toast_label.add_css_class("cl-toast")
+        self.toast_revealer = Gtk.Revealer(child=self.toast_label, halign=Gtk.Align.CENTER, valign=Gtk.Align.END,
+                                           margin_bottom=20, transition_type=Gtk.RevealerTransitionType.SLIDE_UP)
+        overlay.add_overlay(self.toast_revealer)
+        self.set_child(overlay)
         self.connect("close-request", self._on_close)
+        self._refresh_me()
+        self._refresh_peers()
+
+    # ------------------------------------------------------------------ theme
+    def _apply_theme(self) -> None:
+        dark = system_is_dark(self._default_dark)
+        st = Gtk.Settings.get_default()
+        if st:
+            st.set_property("gtk-application-prefer-dark-theme", dark)
+        css = CSS
+        for k, v in PALETTES["dark" if dark else "light"].items():
+            css = css.replace("{" + k + "}", v)
+        self._provider.load_from_string(css) if hasattr(self._provider, "load_from_string") else \
+            self._provider.load_from_data(css.encode())
+
+    @staticmethod
+    def _scroll(child: Gtk.Widget) -> Gtk.ScrolledWindow:
+        sc = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True, hexpand=True)
+        sc.set_child(child)
+        return sc
+
+    # ------------------------------------------------------------------ top bar
+    def _build_top(self) -> None:
+        header = Gtk.HeaderBar(show_title_buttons=True)
+        header.add_css_class("cl-top")
+        brand = Gtk.Box(spacing=8)
+        brand.append(Gtk.Image.new_from_icon_name("cloudlink"))
+        brand.append(_label("CloudLink", "cl-brand"))
+        brand.append(_label("LAN", "cl-badge"))
+        header.pack_start(brand)
+        self.search = Gtk.SearchEntry(placeholder_text="Search files and devices", width_chars=38)
+        self.search.connect("search-changed", lambda *_: self._on_search())
+        header.set_title_widget(self.search)
+        self.settings_btn = _button(icon="emblem-system-symbolic", kind="flat")
+        self.settings_btn.set_tooltip_text("Settings")
+        self.settings_btn.connect("clicked", lambda _b: self.stack.set_visible_child_name(
+            "home" if self.stack.get_visible_child_name() == "settings" else "settings"))
+        home = _button(icon="go-home-symbolic", kind="flat")
+        home.set_tooltip_text("Devices")
+        home.connect("clicked", lambda _b: self.stack.set_visible_child_name("home"))
+        header.pack_end(self.settings_btn)
+        header.pack_end(home)
+        self.set_titlebar(header)
+
+    def _on_search(self) -> None:
+        if self.stack.get_visible_child_name() == "files":
+            self._render_entries()
+        else:
+            self._refresh_peers()
 
     # ------------------------------------------------------------------ engine → UI
     def _on_engine_event(self, kind: str, data: dict) -> None:
@@ -73,27 +239,24 @@ class Window(Gtk.ApplicationWindow):
             self._toast("That device no longer trusts this computer — pair again.")
         return False  # run once
 
-    # ------------------------------------------------------------------ small helpers
     def _toast(self, text: str) -> None:
         self.toast_label.set_text(text)
         self.toast_revealer.set_reveal_child(True)
         GLib.timeout_add_seconds(5, lambda: (self.toast_revealer.set_reveal_child(False), False)[1])
 
-    def _message(self, title: str, body: str, buttons: list[tuple[str, bool]] | None = None, on_response=None) -> None:
+    def _message(self, title: str, body: str, buttons: list[tuple[str, bool]] | None = None, on_response=None) -> None:  # noqa: ANN001
         if self._dialog:
             self._dialog.destroy()
         dlg = Gtk.Window(transient_for=self, modal=True, title=title, resizable=False)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=18, margin_bottom=18,
-                      margin_start=18, margin_end=18)
-        lbl = Gtk.Label(label=body, wrap=True, max_width_chars=48, xalign=0, use_markup=True)
-        box.append(lbl)
+        dlg.add_css_class("cl")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, margin_top=20, margin_bottom=20,
+                      margin_start=22, margin_end=22)
+        box.append(Gtk.Label(label=body, wrap=True, max_width_chars=48, xalign=0, use_markup=True))
         row = Gtk.Box(spacing=8, halign=Gtk.Align.END)
         for text, value in (buttons or [("OK", True)]):
-            b = Gtk.Button(label=text)
-            if value:
-                b.add_css_class("suggested-action")
+            b = _button(text, "primary" if value else "soft")
 
-            def clicked(_b, v=value):
+            def clicked(_b, v=value):  # noqa: ANN001
                 dlg.destroy()
                 self._dialog = None
                 if on_response:
@@ -107,70 +270,141 @@ class Window(Gtk.ApplicationWindow):
         self._dialog = dlg
         dlg.present()
 
-    # ------------------------------------------------------------------ devices tab
-    def _build_devices(self) -> Gtk.Widget:
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=12, margin_bottom=12,
-                       margin_start=12, margin_end=12)
-        self.me_label = Gtk.Label(xalign=0)
-        self.me_label.add_css_class("dim-label")
-        page.append(self.me_label)
-        self.peer_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-        self.peer_list.add_css_class("boxed-list")
-        sc = Gtk.ScrolledWindow(vexpand=True)
-        sc.set_child(self.peer_list)
-        page.append(sc)
+    # ------------------------------------------------------------------ sidebar (this computer / paired / transfers)
+    def _build_sidebar(self) -> Gtk.Widget:
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, margin_top=18, margin_bottom=18,
+                      margin_start=6, margin_end=18, width_request=320)
 
-        page.append(Gtk.Label(label="Connect by IP (if your router blocks discovery)", xalign=0))
+        me = _card()
+        me.append(_label("This computer", "cl-dim"))
+        self.me_name = _label("", "cl-h")
+        me.append(self.me_name)
+        self.me_ip = _label("—", "cl-ip", selectable=True)
+        me.append(self.me_ip)
+        self.me_note = _label("", "cl-dim", wrap=True)
+        me.append(self.me_note)
+        copy = _button("Copy address", "soft")
+        copy.set_halign(Gtk.Align.START)
+        copy.connect("clicked", self._copy_address)
+        me.append(copy)
+        col.append(me)
+
+        paired = _card()
+        paired.append(_label("Paired devices", "cl-h"))
+        self.paired_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        paired.append(self.paired_box)
+        col.append(paired)
+
+        tr = _card()
+        top = Gtk.Box()
+        top.append(_label("Transfers", "cl-h", hexpand=True))
+        clear = _button("Clear", "flat")
+        clear.connect("clicked", self._clear_finished)
+        top.append(clear)
+        tr.append(top)
+        self.transfer_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.transfer_hint = _label("Nothing yet.", "cl-dim")
+        tr.append(self.transfer_hint)
+        tr.append(self.transfer_list)
+        col.append(tr)
+        return self._scroll(col)
+
+    def _refresh_me(self) -> None:
+        st = self.engine.state
+        self._ips = self.engine.local_ips()
+        self.me_name.set_text(st.device_name)
+        ip = self._ips[0] if self._ips else "unknown"
+        self.me_ip.set_text(f"{ip}:{self.engine.port}")
+        mdns = bool(self.engine.discovery and self.engine.discovery.mdns)
+        extra = f" Other addresses: {', '.join(self._ips[1:])}." if len(self._ips) > 1 else ""
+        self.me_note.set_text(("Discovery: mDNS + broadcast. " if mdns else "Discovery: broadcast only "
+                               "(install python3-zeroconf for mDNS). ") + "Type this address on the other device if it can't find you." + extra)
+
+    def _copy_address(self, _b) -> None:  # noqa: ANN001
+        self.get_display().get_clipboard().set(self.me_ip.get_text())
+        self._toast("Address copied.")
+
+    # ------------------------------------------------------------------ home: nearby devices
+    def _build_home(self) -> Gtk.Widget:
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, margin_top=22, margin_bottom=22,
+                       margin_start=26, margin_end=14)
+        page.add_css_class("cl-page")
+        page.append(_label("Devices", "cl-title"))
+        self.home_sub = _label("", "cl-dim")
+        page.append(self.home_sub)
+        self.device_flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=3,
+                                       min_children_per_line=1, column_spacing=14, row_spacing=14,
+                                       homogeneous=True, valign=Gtk.Align.START)
+        page.append(self.device_flow)
+
+        ipc = _card()
+        ipc.append(_label("Connect by IP", "cl-h"))
+        ipc.append(_label("Use this if your router blocks discovery. The other device shows its address on its Devices screen.",
+                          "cl-dim", wrap=True))
         row = Gtk.Box(spacing=8)
         self.ip_entry = Gtk.Entry(placeholder_text="192.168.1.20", hexpand=True)
         self.port_entry = Gtk.Entry(text="47616", width_chars=6)
-        btn = Gtk.Button(label="Pair")
+        btn = _button("Pair", "primary")
         btn.connect("clicked", self._on_pair_ip)
         for w in (self.ip_entry, self.port_entry, btn):
             row.append(w)
-        page.append(row)
-
-        self.toast_label = Gtk.Label(wrap=True)
-        self.toast_revealer = Gtk.Revealer(child=self.toast_label)
-        page.append(self.toast_revealer)
+        ipc.append(row)
+        page.append(ipc)
         return page
 
     def _refresh_peers(self) -> None:
-        st = self.engine.state
-        self.me_label.set_text(f"This computer: {st.device_name} · port {self.engine.port}")
-        child = self.peer_list.get_first_child()
-        while child:
-            nxt = child.get_next_sibling()
-            self.peer_list.remove(child)
-            child = nxt
-        if not self.peers:
-            self.peer_list.append(Gtk.Label(label="No devices found yet — open CloudLink on the other device.",
-                                            margin_top=12, margin_bottom=12))
-        for p in self.peers:
-            row = Gtk.Box(spacing=8, margin_top=8, margin_bottom=8, margin_start=10, margin_end=10)
+        q = self.search.get_text().strip().lower() if hasattr(self, "search") else ""
+        self._refresh_me()
+        shown = [p for p in self.peers if not q or q in (p["name"] or p["id"]).lower()]
+        online = sum(1 for p in self.peers if p["online"])
+        self.home_sub.set_text(f"{online} online · {sum(1 for p in self.peers if p['paired'])} paired")
+        _clear(self.device_flow)
+        if not shown:
+            card = _card()
+            card.append(_label("No devices found yet", "cl-h"))
+            card.append(_label("Open CloudLink on your phone (same Wi-Fi). If it doesn't appear, connect by IP below.",
+                               "cl-dim", wrap=True))
+            self.device_flow.append(card)
+        for p in shown:
+            card = _card()
+            top = Gtk.Box(spacing=10)
+            top.append(Gtk.Image.new_from_icon_name("computer-symbolic" if "linux" in (p["name"] or "").lower()
+                                                    else "phone-symbolic", pixel_size=28))
             info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True)
-            name = Gtk.Label(label=p["name"] or p["id"], xalign=0)
-            name.add_css_class("heading")
-            info.append(name)
-            sub = Gtk.Label(label=f'{"online" if p["online"] else "offline"} · {p["host"]}:{p["port"]}', xalign=0)
-            sub.add_css_class("dim-label")
+            info.append(_label(p["name"] or p["id"], "cl-h", ellipsize=Pango.EllipsizeMode.END))
+            sub = Gtk.Box(spacing=6)
+            sub.append(_label("●", "cl-dot-on" if p["online"] else "cl-dot-off"))
+            sub.append(_label(f'{"online" if p["online"] else "offline"} · {p["host"]}:{p["port"]}', "cl-dim"))
             info.append(sub)
-            row.append(info)
+            top.append(info)
+            card.append(top)
+            acts = Gtk.Box(spacing=8)
             if p["paired"]:
-                openb = Gtk.Button(label="Browse")
+                openb = _button("Browse files", "primary")
                 openb.connect("clicked", lambda _b, peer=p: self._open_peer(peer))
-                forget = Gtk.Button(label="Forget")
+                forget = _button("Forget", "soft")
                 forget.connect("clicked", lambda _b, peer=p: self._forget(peer))
-                row.append(openb)
-                row.append(forget)
+                acts.append(openb)
+                acts.append(forget)
             else:
-                pair = Gtk.Button(label="Pair")
-                pair.add_css_class("suggested-action")
+                pair = _button("Pair", "primary")
                 pair.connect("clicked", lambda _b, peer=p: self.engine.call(self.engine.start_pairing(peer["host"], peer["port"])))
-                row.append(pair)
-            self.peer_list.append(row)
+                acts.append(pair)
+            card.append(acts)
+            self.device_flow.append(card)
 
-    def _on_pair_ip(self, _b) -> None:
+        _clear(self.paired_box)
+        paired = [p for p in self.peers if p["paired"]]
+        if not paired:
+            self.paired_box.append(_label("None yet.", "cl-dim"))
+        for p in paired:
+            r = Gtk.Box(spacing=8)
+            r.append(_label("●", "cl-dot-on" if p["online"] else "cl-dot-off"))
+            r.append(_label(p["name"] or p["id"], hexpand=True, ellipsize=Pango.EllipsizeMode.END))
+            r.append(_label("online" if p["online"] else "offline", "cl-dim"))
+            self.paired_box.append(r)
+
+    def _on_pair_ip(self, _b) -> None:  # noqa: ANN001
         host = self.ip_entry.get_text().strip()
         try:
             port = int(self.port_entry.get_text())
@@ -217,30 +451,41 @@ class Window(Gtk.ApplicationWindow):
                        "busy": "The other device is already pairing."}
             self._message("Pairing failed", esc(reasons.get(d.get("reason", ""), str(d.get("reason", "")))))
 
-    # ------------------------------------------------------------------ files tab
+    # ------------------------------------------------------------------ files page
     def _build_files(self) -> Gtk.Widget:
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=8, margin_bottom=8,
-                       margin_start=8, margin_end=8)
-        bar = Gtk.Box(spacing=6)
-        self.up_btn = Gtk.Button(icon_name="go-up-symbolic")
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=22, margin_bottom=22,
+                       margin_start=26, margin_end=14)
+        page.add_css_class("cl-page")
+        bar = Gtk.Box(spacing=8)
+        self.up_btn = _button(icon="go-up-symbolic", kind="soft")
+        self.up_btn.set_tooltip_text("Up one folder")
         self.up_btn.connect("clicked", lambda _b: self._navigate(self.browse_path.rstrip("/").rpartition("/")[0] or "/"))
-        self.path_label = Gtk.Label(label="Pick a paired device in the Devices tab", xalign=0, hexpand=True,
-                                    ellipsize=Pango.EllipsizeMode.START)
-        up = Gtk.Button(icon_name="document-send-symbolic", tooltip_text="Upload a file here")
+        self.path_label = _label("Pick a paired device on the Devices page", "cl-dim", hexpand=True,
+                                 ellipsize=Pango.EllipsizeMode.START)
+        up = _button("Upload here", "primary")
         up.connect("clicked", self._on_upload)
         for w in (self.up_btn, self.path_label, up):
             bar.append(w)
         page.append(bar)
-        self.file_list = Gtk.ListBox()
-        self.file_list.connect("row-activated", self._on_file_activated)
-        sc = Gtk.ScrolledWindow(vexpand=True)
-        sc.set_child(self.file_list)
-        page.append(sc)
-        self._entries: dict[Gtk.ListBoxRow, dict] = {}
+        self.files_title = _label("Files", "cl-title")
+        self.files_sub = _label("", "cl-dim")
+        page.append(self.files_title)
+        page.append(self.files_sub)
+        self.folder_flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4,
+                                       min_children_per_line=2, column_spacing=12, row_spacing=12,
+                                       homogeneous=True, valign=Gtk.Align.START)
+        self.file_flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=5,
+                                     min_children_per_line=2, column_spacing=12, row_spacing=12,
+                                     homogeneous=True, valign=Gtk.Align.START)
+        page.append(self.folder_flow)
+        page.append(self.file_flow)
+        self.files_msg = _label("", "cl-dim", xalign=0.5, margin_top=24)
+        page.append(self.files_msg)
         return page
 
     def _open_peer(self, peer: dict) -> None:
         self.browse_peer = peer
+        self.search.set_text("")
         self.stack.set_visible_child_name("files")
         self._navigate("/")
 
@@ -248,7 +493,8 @@ class Window(Gtk.ApplicationWindow):
         if not self.browse_peer:
             return
         self.browse_path = path
-        self.path_label.set_text(f'{self.browse_peer["name"]}:{path}')
+        self.files_title.set_text(self.browse_peer["name"])
+        self.path_label.set_text(path)
         self.up_btn.set_sensitive(path != "/")
         self._set_files_message("Loading…")
         peer_id = self.browse_peer["id"]
@@ -263,90 +509,87 @@ class Window(Gtk.ApplicationWindow):
         threading.Thread(target=work, name="cloudlink-list", daemon=True).start()
 
     def _set_files_message(self, text: str) -> bool:
-        self._clear(self.file_list)
-        self._entries = {}
-        self.file_list.append(Gtk.Label(label=text, margin_top=16, margin_bottom=16))
+        _clear(self.folder_flow)
+        _clear(self.file_flow)
+        self.entries_all = []
+        self.files_sub.set_text("")
+        self.files_msg.set_text(text)
         return False
 
     def _show_entries(self, peer_id: str, path: str, entries: list[dict]) -> bool:
         if not self.browse_peer or self.browse_peer["id"] != peer_id or self.browse_path != path:
             return False  # user navigated away meanwhile
-        self._clear(self.file_list)
-        self._entries = {}
-        if not entries:
-            self.file_list.append(Gtk.Label(label="Empty folder", margin_top=16, margin_bottom=16))
-        for e in entries:
-            row = Gtk.ListBoxRow()
-            box = Gtk.Box(spacing=10, margin_top=6, margin_bottom=6, margin_start=8, margin_end=8)
-            box.append(Gtk.Image.new_from_icon_name("folder-symbolic" if e["d"] else "text-x-generic-symbolic"))
-            box.append(Gtk.Label(label=e["n"], xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.MIDDLE))
-            if not e["d"]:
-                size = Gtk.Label(label=human_size(e["s"]))
-                size.add_css_class("dim-label")
-                box.append(size)
-            row.set_child(box)
-            self._entries[row] = e
-            self.file_list.append(row)
+        self.entries_all = entries
+        self._render_entries()
         return False
 
-    @staticmethod
-    def _clear(lb: Gtk.ListBox) -> None:
-        child = lb.get_first_child()
-        while child:
-            nxt = child.get_next_sibling()
-            lb.remove(child)
-            child = nxt
+    def _render_entries(self) -> None:
+        q = self.search.get_text().strip().lower()
+        items = [e for e in self.entries_all if not q or q in e["n"].lower()]
+        folders = [e for e in items if e["d"]]
+        files = [e for e in items if not e["d"]]
+        _clear(self.folder_flow)
+        _clear(self.file_flow)
+        self.files_sub.set_text(f"{len(folders)} folders, {len(files)} files")
+        self.files_msg.set_text("" if items else ("No matches" if q else "This folder is empty"))
+        base = self.browse_path.rstrip("/")
+        for i, e in enumerate(folders):
+            b = Gtk.Button()
+            b.add_css_class("cl-folder")
+            b.add_css_class(f"cl-folder-{i % 3}")
+            box = Gtk.Box(spacing=10)
+            box.append(Gtk.Image.new_from_icon_name("folder-symbolic", pixel_size=26))
+            box.append(_label(e["n"], "cl-h", hexpand=True, ellipsize=Pango.EllipsizeMode.END))
+            b.set_child(box)
+            b.connect("clicked", lambda _b, full=base + "/" + e["n"]: self._navigate(full))
+            self.folder_flow.append(b)
+        for e in files:
+            b = Gtk.Button()
+            b.add_css_class("cl-file")
+            col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            thumb = Gtk.Box(halign=Gtk.Align.FILL, hexpand=True)
+            thumb.add_css_class("cl-thumb")
+            thumb.append(Gtk.Image.new_from_icon_name("text-x-generic-symbolic", pixel_size=36, hexpand=True))
+            col.append(thumb)
+            meta = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, margin_top=8, margin_bottom=10,
+                           margin_start=12, margin_end=12)
+            meta.append(_label(e["n"], "cl-fname", ellipsize=Pango.EllipsizeMode.MIDDLE))
+            meta.append(_label(human_size(e["s"]), "cl-dim"))
+            col.append(meta)
+            b.set_child(col)
+            b.connect("clicked", lambda _b, ent=e: self._download(ent))
+            self.file_flow.append(b)
 
-    def _on_file_activated(self, _lb, row) -> None:
-        e = self._entries.get(row)
-        if not e or not self.browse_peer:
+    def _download(self, e: dict) -> None:
+        if not self.browse_peer:
             return
-        full = (self.browse_path.rstrip("/") + "/" + e["n"])
-        if e["d"]:
-            self._navigate(full)
-        else:
-            self._toast(f'Downloading {e["n"]}…')
-            self.engine.call(self.engine.download(self.browse_peer["id"], full))
-            self.stack.set_visible_child_name("transfers")
+        full = self.browse_path.rstrip("/") + "/" + e["n"]
+        self._toast(f'Downloading {e["n"]}…')
+        self.engine.call(self.engine.download(self.browse_peer["id"], full))
 
-    def _on_upload(self, _b) -> None:
+    def _on_upload(self, _b) -> None:  # noqa: ANN001
         if not self.browse_peer:
             return self._toast("Pick a device first.")
         peer_id, dest = self.browse_peer["id"], self.browse_path
         dlg = Gtk.FileChooserNative(title="Upload a file", transient_for=self, action=Gtk.FileChooserAction.OPEN)
 
-        def resp(d, r):
+        def resp(d, r):  # noqa: ANN001
             if r == Gtk.ResponseType.ACCEPT:
                 f = d.get_file()
                 if f and f.get_path():
                     self.engine.call(self.engine.upload(peer_id, f.get_path(), dest))
-                    self.stack.set_visible_child_name("transfers")
 
         dlg.connect("response", resp)
         self._chooser = dlg  # keep a reference alive
         dlg.show()
 
-    # ------------------------------------------------------------------ transfers tab
-    def _build_transfers(self) -> Gtk.Widget:
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=8, margin_bottom=8,
-                       margin_start=8, margin_end=8)
-        self.transfer_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-        sc = Gtk.ScrolledWindow(vexpand=True)
-        sc.set_child(self.transfer_list)
-        page.append(sc)
-        clear = Gtk.Button(label="Clear finished", halign=Gtk.Align.END)
-        clear.connect("clicked", self._clear_finished)
-        page.append(clear)
-        self._finished: set[str] = set()
-        return page
-
+    # ------------------------------------------------------------------ transfers (sidebar)
     def _on_transfer(self, d: dict) -> None:
         tid = d["tid"]
         entry = self._transfer_rows.get(tid)
         if entry is None:
-            row = Gtk.ListBoxRow(selectable=False)
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, margin_top=6, margin_bottom=6,
-                          margin_start=8, margin_end=8)
+            row = Gtk.ListBoxRow(selectable=False, activatable=False)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, margin_top=6, margin_bottom=6)
             title = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.MIDDLE)
             bar = Gtk.ProgressBar()
             box.append(title)
@@ -355,6 +598,7 @@ class Window(Gtk.ApplicationWindow):
             self.transfer_list.prepend(row)
             entry = (row, title, bar)
             self._transfer_rows[tid] = entry
+            self.transfer_hint.set_visible(False)
         row, title, bar = entry
         arrow = "⬇" if d["direction"] == "in" else "⬆"
         state = d["state"]
@@ -369,48 +613,51 @@ class Window(Gtk.ApplicationWindow):
                     "cancelled": "Cancelled"}.get(state, f'Failed: {d.get("error", "unknown")}')
             title.set_text(f'{arrow} {d["name"]} — {text}')
 
-    def _clear_finished(self, _b) -> None:
+    def _clear_finished(self, _b) -> None:  # noqa: ANN001
         for tid in list(self._finished):
             row, _t, _b2 = self._transfer_rows.pop(tid)
             self.transfer_list.remove(row)
         self._finished.clear()
+        self.transfer_hint.set_visible(not self._transfer_rows)
 
-    # ------------------------------------------------------------------ settings tab
+    # ------------------------------------------------------------------ settings page
     def _build_settings(self) -> Gtk.Widget:
         st = self.engine.state
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=16, margin_bottom=16,
-                       margin_start=16, margin_end=16)
-        page.append(Gtk.Label(label="Device name", xalign=0))
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, margin_top=22, margin_bottom=22,
+                       margin_start=26, margin_end=14)
+        page.add_css_class("cl-page")
+        page.append(_label("Settings", "cl-title"))
+        card = _card()
+        card.append(_label("Device name", "cl-h"))
         self.name_entry = Gtk.Entry(text=st.device_name)
-        page.append(self.name_entry)
-        page.append(Gtk.Label(label="Shared folder (what paired devices can browse)", xalign=0))
-        self.root_label = Gtk.Label(label=str(st.get_share_root()), xalign=0, ellipsize=Pango.EllipsizeMode.MIDDLE)
-        choose = Gtk.Button(label="Choose folder…")
+        card.append(self.name_entry)
+        card.append(_label("Shared folder (what paired devices can browse)", "cl-h", margin_top=8))
+        self.root_label = _label(str(st.get_share_root()), ellipsize=Pango.EllipsizeMode.MIDDLE, hexpand=True)
+        choose = _button("Choose folder…", "soft")
         choose.connect("clicked", self._choose_root)
         row = Gtk.Box(spacing=8)
-        self.root_label.set_hexpand(True)
         row.append(self.root_label)
         row.append(choose)
-        page.append(row)
-        up_row = Gtk.Box(spacing=8)
-        up_row.append(Gtk.Label(label="Allow paired devices to upload into the shared folder", xalign=0, hexpand=True))
+        card.append(row)
+        up_row = Gtk.Box(spacing=8, margin_top=8)
+        up_row.append(_label("Allow paired devices to upload into the shared folder", hexpand=True))
         self.upload_switch = Gtk.Switch(active=st.allow_uploads, valign=Gtk.Align.CENTER)
         up_row.append(self.upload_switch)
-        page.append(up_row)
-        save = Gtk.Button(label="Save", halign=Gtk.Align.START)
-        save.add_css_class("suggested-action")
+        card.append(up_row)
+        save = _button("Save", "primary")
+        save.set_halign(Gtk.Align.START)
+        save.set_margin_top(8)
         save.connect("clicked", self._save_settings)
-        page.append(save)
-        note = Gtk.Label(label="Everything stays on your local network. Only devices you paired by comparing a code can connect.",
-                         wrap=True, xalign=0)
-        note.add_css_class("dim-label")
-        page.append(note)
+        card.append(save)
+        page.append(card)
+        page.append(_label("Everything stays on your local network. Only devices you paired by comparing a code can connect.",
+                           "cl-dim", wrap=True))
         return page
 
-    def _choose_root(self, _b) -> None:
+    def _choose_root(self, _b) -> None:  # noqa: ANN001
         dlg = Gtk.FileChooserNative(title="Shared folder", transient_for=self, action=Gtk.FileChooserAction.SELECT_FOLDER)
 
-        def resp(d, r):
+        def resp(d, r):  # noqa: ANN001
             if r == Gtk.ResponseType.ACCEPT and d.get_file():
                 self.root_label.set_text(d.get_file().get_path())
 
@@ -418,7 +665,7 @@ class Window(Gtk.ApplicationWindow):
         self._chooser = dlg
         dlg.show()
 
-    def _save_settings(self, _b) -> None:
+    def _save_settings(self, _b) -> None:  # noqa: ANN001
         st = self.engine.state
         st.device_name = self.name_entry.get_text().strip()[:48] or st.device_name
         st.share_root = self.root_label.get_text()
@@ -426,7 +673,7 @@ class Window(Gtk.ApplicationWindow):
         st.save()
         self._toast("Saved. Sharing changes apply to new connections; a new name shows after restart.")
 
-    def _on_close(self, *_a) -> bool:
+    def _on_close(self, *_a) -> bool:  # noqa: ANN002
         self.engine.stop()
         return False
 

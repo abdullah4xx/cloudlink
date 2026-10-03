@@ -50,7 +50,7 @@ class ServerService : Service() {
         val stop = PendingIntent.getService(this, 1, Intent(this, ServerService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.drawable.ic_stat_cloudlink)
             .setContentTitle("CloudLink is running")
             .setContentText("Paired devices on your Wi-Fi can reach this phone (port $port)")
             .setContentIntent(open)

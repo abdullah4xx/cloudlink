@@ -17,6 +17,7 @@ class CloudLinkApp : Application() {
             state = state,
             downloadDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "CloudLink"),
             shareRootProvider = { shareRoot(state) },
+            context = applicationContext,
         )
     }
 

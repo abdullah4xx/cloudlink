@@ -38,6 +38,7 @@ class Engine(
     private val beaconPort: Int = Discovery.PORT,
     private val beaconTargets: List<InetSocketAddress>? = null,
     private val listenHost: String? = null,   // null = all interfaces
+    private val context: android.content.Context? = null,   // enables mDNS discovery when given
 ) {
     private class Link(val peerId: String, val conn: Conn, val session: PeerSession) {
         var job: Job? = null
@@ -90,7 +91,7 @@ class Engine(
         val s = srv ?: throw EngineError("no free TCP port")
         server = s
         port = s.localPort
-        val d = Discovery(state.deviceId, { state.deviceName }, { port }, ::publishPeers, beaconPort, beaconTargets)
+        val d = Discovery(state.deviceId, { state.deviceName }, { port }, ::publishPeers, beaconPort, beaconTargets, context = context)
         try { d.start(scope) } catch (e: Exception) { toast("Discovery unavailable: ${e.message} — use 'connect by IP'") }
         discovery = d
         running = true
