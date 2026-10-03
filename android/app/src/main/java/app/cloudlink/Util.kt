@@ -1,6 +1,8 @@
 package app.cloudlink
 
 import java.io.File
+import java.net.Inet4Address
+import java.net.NetworkInterface
 
 class LanException(message: String) : Exception(message)
 
@@ -41,4 +43,15 @@ fun resolveUnder(root: File, rel: String): File? {
     val r = root.canonicalFile
     val p = File(r, rel.trimStart('/')).canonicalFile
     return if (p == r || p.path.startsWith(r.path + File.separator)) p else null
+}
+
+/** Private IPv4 addresses of this device (Wi-Fi first), so the user can read them out / type them on the other device. */
+fun localIpv4s(): List<String> = try {
+    NetworkInterface.getNetworkInterfaces().toList()
+        .filter { it.isUp && !it.isLoopback && !it.isVirtual }
+        .sortedBy { if (it.name.startsWith("wlan")) 0 else 1 }
+        .flatMap { ni -> ni.interfaceAddresses.mapNotNull { (it.address as? Inet4Address)?.takeIf { a -> a.isSiteLocalAddress }?.hostAddress } }
+        .distinct()
+} catch (_: Exception) {
+    emptyList()
 }

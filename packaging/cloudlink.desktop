@@ -2,7 +2,8 @@
 Type=Application
 Name=CloudLink
 Comment=Share files with your phone over Wi-Fi (no internet, no server)
+StartupWMClass=app.cloudlink.Linux
 Exec=cloudlink-gtk
-Icon=folder-remote
+Icon=cloudlink
 Terminal=false
 Categories=Network;FileTransfer;
