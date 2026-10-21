@@ -229,12 +229,17 @@ class Engine(
     }
 
     // ------------------------------------------------------------------ UI API
-    suspend fun listDir(peerId: String, path: String): List<Entry> = link(peerId).session.requestListAll(path)
+    suspend fun listDir(peerId: String, path: String): List<Entry> = withContext(Dispatchers.IO) {
+        link(peerId).session.requestListAll(path)
+    }
 
-    suspend fun download(peerId: String, path: String) = link(peerId).session.requestGet(path)
+    suspend fun download(peerId: String, path: String) = withContext(Dispatchers.IO) {
+        link(peerId).session.requestGet(path)
+    }
 
-    suspend fun upload(peerId: String, file: File, destDir: String = "/"): Boolean =
+    suspend fun upload(peerId: String, file: File, destDir: String = "/"): Boolean = withContext(Dispatchers.IO) {
         link(peerId).session.sendFile(file, dest = destDir)
+    }
 
     fun unpair(peerId: String) {
         links.remove(peerId)?.conn?.close()
